@@ -52,6 +52,8 @@ public class GameActivity extends Activity {
 
     // NWDECK: analog stick -> held arrow-key state (left, right, up, down)
     private final boolean[] mStickState = new boolean[4];
+    // NWDECK: analog triggers -> held pageup/pagedown state (0=L2, 1=R2)
+    private final boolean[] mTriggerState = new boolean[2];
 
     private void dispatchKeyToGame(int keyCode, boolean down) {
         if (mWebView == null) return;
@@ -169,11 +171,30 @@ public class GameActivity extends Activity {
     @Override
     protected void onPause() {
         if (mWebView != null) {
+            // NWDECK: release every translated key we may have left held. The
+            // engine clears its own state on window blur (rpg_core.js
+            // Input._onLostFocus), but whether the WebView fires blur on
+            // pause is device-dependent — a lost keyup would leave a button
+            // pressed forever (auto-confirming menus on wake). Sending keyups
+            // for non-held keys is a harmless no-op for the engine.
+            for (int mapped : new java.util.TreeSet<>(GAMEPAD_TO_KEY.values())) {
+                dispatchKeyToGame(mapped, false);
+            }
+            releaseStickAndTriggers();
             mWebView.eval("window.nw.Window.get().dispatchEvent(new Event('minimize'));");
             mWebView.onPause();
         }
 
         super.onPause();
+    }
+
+    private void releaseStickAndTriggers() {
+        setStickAxis(0, false, 37);
+        setStickAxis(1, false, 39);
+        setStickAxis(2, false, 38);
+        setStickAxis(3, false, 40);
+        setTriggerAxis(0, false, 81);
+        setTriggerAxis(1, false, 87);
     }
 
     @Override
@@ -183,10 +204,11 @@ public class GameActivity extends Activity {
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
-        // NWDECK: diagnostics — gamepad key events are rare; log them for the deck's channel
-        Log.i("nwdeck", "dispatchKeyEvent kc=" + event.getKeyCode() + " action=" + event.getAction()
-            + " src=0x" + Integer.toHexString(event.getSource()) + " rep=" + event.getRepeatCount());
+        // NWDECK: diagnostics — log only gamepad-sourced keys (keyboard events
+        // include the system's own DPAD/BACK chatter; logging those is noise)
         if (event.isFromSource(SOURCE_GAMEPAD)) {
+            Log.i("nwdeck", "dispatchKeyEvent kc=" + event.getKeyCode() + " action=" + event.getAction()
+                + " src=0x" + Integer.toHexString(event.getSource()) + " rep=" + event.getRepeatCount());
             int keyCode = event.getKeyCode();
             if (keyCode == KeyEvent.KEYCODE_BUTTON_MODE) {
                 if (event.getAction() == KeyEvent.ACTION_UP) {
@@ -214,17 +236,23 @@ public class GameActivity extends Activity {
     @Override
     public boolean dispatchGenericMotionEvent(MotionEvent event) {
         if (event.isFromSource(SOURCE_JOYSTICK)) {
-            Log.i("nwdeck", "motion src=0x" + Integer.toHexString(event.getSource())
-                + " x=" + event.getAxisValue(MotionEvent.AXIS_X) + " y=" + event.getAxisValue(MotionEvent.AXIS_Y));
             // NWDECK: translate analog stick axes into held arrow keys.
             // The engine only sees gamepad state through navigator.getGamepads(),
             // which Android WebView does not implement — so the stick was mute.
             float x = event.getAxisValue(MotionEvent.AXIS_X);
             float y = event.getAxisValue(MotionEvent.AXIS_Y);
-            setStickAxis(0, x < -0.5f, 37); // left
-            setStickAxis(1, x >  0.5f, 39); // right
-            setStickAxis(2, y < -0.5f, 38); // up
-            setStickAxis(3, y >  0.5f, 40); // down
+            // hysteresis: engage at |0.6|, release at |0.4| — jittery sticks
+            // must not flap the key state (menu flicker / walk stutter)
+            setStickAxis(0, x < -0.6f || (mStickState[0] && x < -0.4f), 37); // left
+            setStickAxis(1, x >  0.6f || (mStickState[1] && x >  0.4f), 39); // right
+            setStickAxis(2, y < -0.6f || (mStickState[2] && y < -0.4f), 38); // up
+            setStickAxis(3, y >  0.6f || (mStickState[3] && y >  0.4f), 40); // down
+            // NWDECK: analog triggers (this deck reports GAS/BRAKE, not
+            // BUTTON_L2/R2 keycodes — without this, L2/R2 are physically mute)
+            float gas = event.getAxisValue(MotionEvent.AXIS_GAS);
+            float brake = event.getAxisValue(MotionEvent.AXIS_BRAKE);
+            setTriggerAxis(0, gas >  0.5f, 81);  // L2 -> pageup
+            setTriggerAxis(1, brake > 0.5f, 87); // R2 -> pagedown
             return true;
         }
         return super.dispatchGenericMotionEvent(event);
@@ -233,6 +261,12 @@ public class GameActivity extends Activity {
     private void setStickAxis(int index, boolean active, int keyCode) {
         if (mStickState[index] == active) return;
         mStickState[index] = active;
+        dispatchKeyToGame(keyCode, active);
+    }
+
+    private void setTriggerAxis(int index, boolean active, int keyCode) {
+        if (mTriggerState[index] == active) return;
+        mTriggerState[index] = active;
         dispatchKeyToGame(keyCode, active);
     }
 }
