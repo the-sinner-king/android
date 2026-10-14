@@ -6,6 +6,7 @@ import static android.view.InputDevice.SOURCE_JOYSTICK;
 import android.app.Activity;
 import android.app.Dialog;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.ViewGroup;
@@ -182,6 +183,9 @@ public class GameActivity extends Activity {
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
+        // NWDECK: diagnostics — gamepad key events are rare; log them for the deck's channel
+        Log.i("nwdeck", "dispatchKeyEvent kc=" + event.getKeyCode() + " action=" + event.getAction()
+            + " src=0x" + Integer.toHexString(event.getSource()) + " rep=" + event.getRepeatCount());
         if (event.isFromSource(SOURCE_GAMEPAD)) {
             int keyCode = event.getKeyCode();
             if (keyCode == KeyEvent.KEYCODE_BUTTON_MODE) {
@@ -190,10 +194,12 @@ public class GameActivity extends Activity {
                 }
             } else {
                 Integer mapped = GAMEPAD_TO_KEY.get(keyCode);
+                Log.i("nwdeck", "mapped " + keyCode + " -> " + mapped);
                 if (mapped != null) {
                     boolean down = event.getAction() == KeyEvent.ACTION_DOWN;
                     if (!down || event.getRepeatCount() == 0) {
                         dispatchKeyToGame(mapped, down);
+                        Log.i("nwdeck", "dispatchKeyToGame(" + mapped + "," + down + ") sent");
                     }
                 } else {
                     // unmapped gamepad key: keep the old raw-forwarding behavior
@@ -208,6 +214,8 @@ public class GameActivity extends Activity {
     @Override
     public boolean dispatchGenericMotionEvent(MotionEvent event) {
         if (event.isFromSource(SOURCE_JOYSTICK)) {
+            Log.i("nwdeck", "motion src=0x" + Integer.toHexString(event.getSource())
+                + " x=" + event.getAxisValue(MotionEvent.AXIS_X) + " y=" + event.getAxisValue(MotionEvent.AXIS_Y));
             // NWDECK: translate analog stick axes into held arrow keys.
             // The engine only sees gamepad state through navigator.getGamepads(),
             // which Android WebView does not implement — so the stick was mute.
