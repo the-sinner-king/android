@@ -56,7 +56,7 @@ public class GameActivity extends Activity {
     private void dispatchKeyToGame(int keyCode, boolean down) {
         if (mWebView == null) return;
         mWebView.eval(
-            "(function(k,down){var ev=new KeyboardEvent(down?'keydown':'keyup',{bubbles:true});" +
+            "(function(k,down){var ev=new KeyboardEvent(down?'keydown':'keyup',{key:String.fromCharCode(k),bubbles:true});" +
             "Object.defineProperty(ev,'keyCode',{get:function(){return k}});" +
             "Object.defineProperty(ev,'which',{get:function(){return k}});" +
             "document.dispatchEvent(ev)})(%d,%b)", keyCode, down);
