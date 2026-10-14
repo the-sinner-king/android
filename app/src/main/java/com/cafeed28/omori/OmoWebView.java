@@ -185,19 +185,40 @@ public class OmoWebView extends WebView {
             var logLine = String.format("[CONSOLE]: %s", consoleMessage.message());
 
             if (BuildConfig.DEBUG) {
+                // NWDECK: Debug is a process-local singleton created only in
+                // MainActivity.onCreate. The WebView renderer is a SEPARATE
+                // process and never runs that code, so Debug.i() is always null
+                // here — and ANY console message used to NPE-kill the renderer,
+                // wedging the game on a black screen (ED-30). Fall back to
+                // android.util.Log instead of dying.
+                Debug debug = Debug.i();
+
+                if (debug == null) {
+                    int prio = Log.INFO;
+                    switch (consoleMessage.messageLevel()) {
+                        case ERROR: prio = Log.ERROR; break;
+                        case WARNING: prio = Log.WARN; break;
+                        case TIP:
+                        case DEBUG: prio = Log.DEBUG; break;
+                        default: break;
+                    }
+                    Log.println(prio, "omori", logLine);
+                    return true;
+                }
+
                 switch (consoleMessage.messageLevel()) {
                     case ERROR: // error
-                        Debug.i().log(Log.ERROR, "%s\n  from %s:%s", logLine, consoleMessage.sourceId(), consoleMessage.lineNumber());
+                        debug.log(Log.ERROR, "%s\n  from %s:%s", logLine, consoleMessage.sourceId(), consoleMessage.lineNumber());
                         break;
                     case WARNING: // warn
-                        Debug.i().log(Log.WARN, logLine);
+                        debug.log(Log.WARN, logLine);
                         break;
                     case LOG: // info, log
-                        Debug.i().log(Log.INFO, logLine);
+                        debug.log(Log.INFO, logLine);
                         break;
                     case TIP: // debug
                     case DEBUG: // ?
-                        Debug.i().log(Log.DEBUG, logLine);
+                        debug.log(Log.DEBUG, logLine);
                         break;
                 }
             }

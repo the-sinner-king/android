@@ -17,10 +17,49 @@ import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
+
 public class GameActivity extends Activity {
     private OmoWebView mWebView;
     private Dialog mMenuDialog;
     private Dialog mQuitDialog;
+
+    // NWDECK: physical gamepad button -> OMORI keyboard keycode (Input.keyMapper).
+    // WebView maps KEYCODE_BUTTON_* to DOM keyCode 0 ("Unidentified"), so the raw
+    // forwarding this class used to do never reached the engine. We translate here,
+    // in Java, where the keycode is still known, and hand the engine a synthetic
+    // KeyboardEvent with a real keyCode (verified end-to-end: _nwKey path).
+    private static final Map<Integer, Integer> GAMEPAD_TO_KEY = new HashMap<>();
+    static {
+        GAMEPAD_TO_KEY.put(KeyEvent.KEYCODE_BUTTON_A, 90);      // ok (Z)
+        GAMEPAD_TO_KEY.put(KeyEvent.KEYCODE_BUTTON_B, 88);      // escape (X)
+        GAMEPAD_TO_KEY.put(KeyEvent.KEYCODE_BUTTON_X, 65);      // tag (A)
+        GAMEPAD_TO_KEY.put(KeyEvent.KEYCODE_BUTTON_Y, 16);      // shift (dash)
+        GAMEPAD_TO_KEY.put(KeyEvent.KEYCODE_BUTTON_L1, 81);     // pageup
+        GAMEPAD_TO_KEY.put(KeyEvent.KEYCODE_BUTTON_R1, 87);     // pagedown
+        GAMEPAD_TO_KEY.put(KeyEvent.KEYCODE_BUTTON_L2, 81);     // pageup
+        GAMEPAD_TO_KEY.put(KeyEvent.KEYCODE_BUTTON_R2, 87);     // pagedown
+        GAMEPAD_TO_KEY.put(KeyEvent.KEYCODE_BUTTON_START, 88);  // start = escape
+        GAMEPAD_TO_KEY.put(KeyEvent.KEYCODE_BUTTON_SELECT, 9);  // select = tab
+        GAMEPAD_TO_KEY.put(KeyEvent.KEYCODE_DPAD_UP, 38);
+        GAMEPAD_TO_KEY.put(KeyEvent.KEYCODE_DPAD_DOWN, 40);
+        GAMEPAD_TO_KEY.put(KeyEvent.KEYCODE_DPAD_LEFT, 37);
+        GAMEPAD_TO_KEY.put(KeyEvent.KEYCODE_DPAD_RIGHT, 39);
+    }
+
+    // NWDECK: analog stick -> held arrow-key state (left, right, up, down)
+    private final boolean[] mStickState = new boolean[4];
+
+    private void dispatchKeyToGame(int keyCode, boolean down) {
+        if (mWebView == null) return;
+        mWebView.eval(
+            "(function(k,down){var ev=new KeyboardEvent(down?'keydown':'keyup',{bubbles:true});" +
+            "Object.defineProperty(ev,'keyCode',{get:function(){return k}});" +
+            "Object.defineProperty(ev,'which',{get:function(){return k}});" +
+            "document.dispatchEvent(ev)})(%d,%b)", keyCode, down);
+    }
 
     private void hideSystemUI() {
         WindowInsetsControllerCompat controller = WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
@@ -31,6 +70,19 @@ public class GameActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        // NWDECK: Debug is initialized in MainActivity.onCreate only. When this
+        // activity is launched directly (am start .GameActivity), Debug.i() stays
+        // null in THIS process and the first console message NPE-kills the app
+        // (see OmoWebView.onConsoleMessage / ED-30). Initialize lazily here too.
+        if (Debug.i() == null) {
+            try {
+                new Debug(getFilesDir().getAbsolutePath());
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+
         setContentView(R.layout.activity_game);
 
         mWebView = findViewById(R.id.webView);
@@ -137,7 +189,16 @@ public class GameActivity extends Activity {
                     onBackPressed();
                 }
             } else {
-                mWebView.dispatchKeyEvent(event);
+                Integer mapped = GAMEPAD_TO_KEY.get(keyCode);
+                if (mapped != null) {
+                    boolean down = event.getAction() == KeyEvent.ACTION_DOWN;
+                    if (!down || event.getRepeatCount() == 0) {
+                        dispatchKeyToGame(mapped, down);
+                    }
+                } else {
+                    // unmapped gamepad key: keep the old raw-forwarding behavior
+                    mWebView.dispatchKeyEvent(event);
+                }
             }
             return true;
         }
@@ -147,9 +208,23 @@ public class GameActivity extends Activity {
     @Override
     public boolean dispatchGenericMotionEvent(MotionEvent event) {
         if (event.isFromSource(SOURCE_JOYSTICK)) {
-            mWebView.dispatchGenericMotionEvent(event);
+            // NWDECK: translate analog stick axes into held arrow keys.
+            // The engine only sees gamepad state through navigator.getGamepads(),
+            // which Android WebView does not implement — so the stick was mute.
+            float x = event.getAxisValue(MotionEvent.AXIS_X);
+            float y = event.getAxisValue(MotionEvent.AXIS_Y);
+            setStickAxis(0, x < -0.5f, 37); // left
+            setStickAxis(1, x >  0.5f, 39); // right
+            setStickAxis(2, y < -0.5f, 38); // up
+            setStickAxis(3, y >  0.5f, 40); // down
             return true;
         }
         return super.dispatchGenericMotionEvent(event);
+    }
+
+    private void setStickAxis(int index, boolean active, int keyCode) {
+        if (mStickState[index] == active) return;
+        mStickState[index] = active;
+        dispatchKeyToGame(keyCode, active);
     }
 }
